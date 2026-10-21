@@ -5,7 +5,7 @@
 ## 会话与常用流程
 
 - 编辑器必须正在运行并连接 MCP 本机桥。`get_editor_state` 返回离线错误时，先让用户启动或重新连接桌面应用；MCP stdio 服务与桌面应用可分别运行。
-- 先 `get_editor_state` 确认工程、播放头、画布、选择范围；需要检查具体对象时用 `list_danmakus`。
+- 先 `get_editor_state` 确认工程、播放头、画布、选择范围；需要检查具体对象时用 `list_danmakus`。若 ready 为 false，请让用户先选择一个工程打开进入编辑页面
 - 普通字段编辑和工具栏操作默认作用于当前选择。可先用 `select_by_command` 按 `/s` 筛选，也可在读取弹幕时用 ID 列表缩小检查范围。
 - 创建或编辑后检查操作结果的新增、修改、删除和选中 ID；需要视觉检查时调用 `get_frame`。创建成功会自动分配新 ID 并选中新弹幕。
 - 不要把 `get_frame` 当作截图当前播放头：它渲染传入的 `timeMs`，不会改变主窗口播放头或工程。
@@ -156,38 +156,46 @@
 
 `apply_field_update` 输入为 `{ "field": "字段路径", "method": "输入值" }`，编辑字段使用带点的路径，例如 `transform.start.x`、`content.text`、`opacity.from`。数值字段支持直接赋值 `1000`、相对运算 `+100` / `-50` / `*2` / `/2`、随机范围 `r+50` / `r-30` / `r100`，以及以 `$` 开头的 math.js 表达式。`$` 后不写为空格分隔语法，例如 `"$startTime + duration / 2"`。表达式按当前选择中的每条弹幕分别求值。
 
-字段编辑表达式使用 `about.vue` 中的别名：`layer`、`startTime`、`size`、`startX`、`startY`、`endX`、`endY`、`zRotate`、`yRotate`、`opacityFrom`、`opacityTo`、`duration`、`moveDuration`、`delay`。这些别名与创建规则用的带点字段路径作用域不同。颜色可使用普通十六进制色值或 Alpha 混合格式，例如 `FFFFFF@0.5`。
+字段编辑表达式使用别名：`layer`、`startTime`、`size`、`startX`、`startY`、`endX`、`endY`、`zRotate`、`yRotate`、`opacityFrom`、`opacityTo`、`duration`、`moveDuration`、`delay`。这些别名与创建规则用的带点字段路径作用域不同。
+颜色可使用普通十六进制色值或 Alpha 混合格式，例如 `FFFFFF@0.5`。
 
-`execute_edit_command` 可用分号合并多条数值赋值，例如 `startX = startX + 20;zRotate = 90`。同一命令中的表达式都以执行前的原字段值计算。`select_by_command` 使用 `/s` 语法：`;` 分隔 OR 规则组，`,` 分隔 AND 条件；数值范围写 `100~56000`，严格匹配用单引号，正则用尖括号，例如 `/s startTime:"100~56000",text:"<^sample>"`。筛选字段名见 `about.vue` 的“高级工具 / 命令工具”。
+`execute_edit_command` 可用分号合并多条数值赋值，例如 `startX = startX + 20;zRotate = 90`。同一命令中的表达式都以执行前的原字段值计算。特殊赋值规则 upset：字段名 = upset，在选中弹幕范围内打乱所选字段，此方法单独定义，不可插入计算式
 
-## 渲染规则
-
-- 坐标是画布像素。弹幕在 `startTime <= 当前时间 <= startTime + animation.duration` 时属于可见时间范围；`duration` 是生存总时长。
-- 运动进度基于 `elapsed = 当前时间 - startTime`。若 `moveDuration <= 0`，运动进度立即为 1；若 `elapsed <= delay`，进度为 0；其余情况使用 `clamp((elapsed - delay) / moveDuration, 0, 1)`。
-- 缓动后的位置在起终点间插值：`x = start.x + (end.x - start.x) * progress`，Y 同理。`speedup` 为 `progress²`，`speeddown` 为 `1 - (1 - progress)²`。运动结束后位置停在终点，弹幕仍可在剩余生存时间内显示。
-- 透明度按生存进度线性插值：`lifeProgress = clamp(elapsed / duration, 0, 1)`，`opacity = from + (to - from) * lifeProgress`。透明度进度从 `startTime` 开始，不受运动 `delay` 影响。
-- `content.size` 是像素字号，`content.color` 是文字颜色，`content.stroke` 控制描边；`transform.zRotate` 为 Z 轴角度，Y 轴渲染使用 CSS `rotateY(360 - yRotate)`。
-- 渲染排序先按 `startTime` 升序，同一开始时间再按 `layer` 升序。规范化会把字号限制在 10–127、透明度限制在 0–1、旋转角归一到 `[0, 360)`，并将数值字段取整；坐标、开始时间、运动时间和延迟是否允许负数取决于工程的“允许负值”设置。
-
-`get_frame` 接收 `{ "timeMs": 1000, "maxDimension": 1280 }`，最长边范围 16–1920，默认 1280。它通过独立渲染窗口复用视频导出画面管线，返回 MCP 图片内容；含视频工程需有可访问的本地媒体文件。它不移动主界面播放头，也不修改工程。
+`select_by_command` 使用 `/s` 语法：`;` 分隔 OR 规则组，`,` 分隔 AND 条件，在双引号内 `,` 的含义相反为 OR；数值范围写 `数值/表达式~数值/表达式`，严格匹配用单引号，正则用尖括号，当前选择：`selecting`
+例如 `/s endX:"startX~startX+200,'300'",text:"<^sample>";selecting`，意为 新选择项 = (向右移动小于200 || endX为300) && 文本字段以sample开头 || 当前选择项
 
 ## 工具索引
 
 以下功能名对应 MCP 工具名；可选参数使用当前工具 schema 的默认值。
 
-| 功能 | 工具 / 参数 | 用途 |
-| --- | --- | --- |
-| 状态与弹幕 | `get_editor_state({})`；`list_danmakus({selectedOnly?, ids?, offset?, limit?})` | 读取会话状态；分页读取当前选择或全部弹幕。 |
-| 字段编辑 | `apply_field_update({field, method})` | 编辑当前选择字段；数字支持赋值、相对值、随机值和 `$` 表达式。 |
-| 创建 | `create_danmakus({danmaku XOR jsonPath, relativeToCurrentTime})`；`create_generated_danmakus({quantity, rules, relativeToCurrentTime?})` | 直接创建对象或按规则生成。 |
-| 删除与选择 | `delete_danmakus({ids?})`；`select_by_command({command})` | 删除 ID 列表或当前选择；用 `/s` 命令重置选择范围。 |
-| 播放头与画布 | `update_current_time({currentTime})`；`update_editor_settings({screenWidth?, screenHeight?, maxLayers?})` | 时间单位毫秒；画布宽高至少 10，最大层数不能低于现有弹幕层级。 |
-| 保存与备份 | `save_folder_project({})`；`backup_folder_project({})` | 保存当前文件夹工程，备份写入工程 `backup` 目录。 |
-| 日志与历史 | `get_editor_logs({type?, offset?, limit?})`；`list_history_snapshots({})`；`get_history_snapshot({snapshotId, offset?, limit?})` | 读当前会话日志；先列快照再按 ID 分页读快照中的弹幕。 |
-| 命令与描边 | `execute_edit_command({command})`；`apply_stroke({width, color})` | 运行工具栏数值赋值命令；生成描边副本。 |
-| 坐标工具 | `center_danmakus({axis, scope?})`；`copy_coordinates({direction?})`；`swap_coordinates({})`；`mirror_danmakus({axis})` | 居中、复制或互换起终点坐标、按画布镜像。居中 `axis=x` 表示垂直居中，`axis=y` 表示水平居中；scope 为 `S` 起点、`E` 终点、`B` 两端。镜像轴为 `horizontal` 或 `vertical`。 |
-| 运动计算 | `calculate_rotation({})`；`set_movement_length({length, angle?})`；`lock_movement_angle({changedAxis, angle?})` | 按坐标计算角度、按长度/角度设置终点、修改一轴时保持运动角。 |
-| 分割与历史操作 | `split_danmakus({mode})`；`undo_edit({})`；`redo_edit({})` | 按 `line`、`letter` 或 `time` 分割；撤销/重做最近操作。字分割和居中需要界面测量能力。 |
-| 视觉检查 | `get_frame({timeMs, maxDimension?})` | 获取指定时间的画面图片。 |
+| 工具名与接收结构 | 参数意义和用途 |
+| --- | --- |
+| `get_editor_state({})` | 无参数。读取当前编辑会话、工程、播放头、画布和选择状态。 |
+| `list_danmakus({selectedOnly?, ids?, offset?, limit?})` | `selectedOnly` 只读取当前选择；`ids` 限定弹幕 ID；`offset`、`limit` 用于分页。读取当前选择或全部弹幕。 |
+| `apply_field_update({field, method})` | `field` 为要编辑的字段路径，`method` 为输入值或编辑表达式。编辑当前选择；数值支持赋值、相对值、随机值和 `$` 表达式。 |
+| `create_danmakus({danmaku XOR jsonPath, relativeToCurrentTime})` | `danmaku` 为弹幕对象或对象数组，`jsonPath` 为本机 JSON 文件路径，二者必选其一；`relativeToCurrentTime` 决定是否将整批弹幕对齐到当前播放头。直接创建弹幕。 |
+| `create_generated_danmakus({quantity, rules, relativeToCurrentTime?})` | `quantity` 为生成数量，`rules` 为字段生成规则；`relativeToCurrentTime` 控制是否相对当前播放头创建。按规则生成弹幕。 |
+| `delete_danmakus({ids?})` | `ids` 指定要删除的弹幕 ID；省略时删除当前选择。 |
+| `select_by_command({command})` | `command` 为 `/s` 筛选命令。按命令重新选择匹配的弹幕。 |
+| `update_current_time({currentTime})` | `currentTime` 为目标播放头时间，单位毫秒。 |
+| `update_editor_settings({screenWidth?, screenHeight?, maxLayers?})` | `screenWidth`、`screenHeight` 设置画布像素宽高；`maxLayers` 设置最大层数，决定自动分配的层级上限 |
+| `save_folder_project({})` | 无参数。保存当前文件夹工程；单文件工程不支持。 |
+| `backup_folder_project({})` | 无参数。备份当前文件夹工程到工程的 `backup` 目录；单文件工程不支持。 |
+| `get_editor_logs({type?, offset?, limit?})` | `type` 可筛选日志类型；`offset`、`limit` 用于分页。读取当前会话日志。 |
+| `list_history_snapshots({})` | 无参数。列出可读取的历史快照。 |
+| `get_history_snapshot({snapshotId, offset?, limit?})` | `snapshotId` 指定快照；`offset`、`limit` 用于分页读取快照中的弹幕。 |
+| `execute_edit_command({command})` | `command` 为工具栏数值赋值命令，可用分号合并多条赋值。对当前选择执行命令。 |
+| `apply_stroke({width, color})` | `width` 为描边宽度，`color` 为描边颜色。为当前选择生成描边副本。 |
+| `center_danmakus({axis, scope?})` | `axis` 指定居中轴（`x` 垂直居中，`y` 水平居中）；`scope` 指定起点 `S`、终点 `E` 或两端 `B`。居中当前选择。 |
+| `copy_coordinates({direction?})` | 可选 `direction` 指定坐标复制方向。复制当前选择的起点/终点坐标。 |
+| `swap_coordinates({})` | 无参数。互换当前选择的起点与终点坐标。 |
+| `mirror_danmakus({axis})` | `axis` 为 `horizontal` 或 `vertical`。按画布指定轴镜像当前选择。 |
+| `calculate_rotation({})` | 无参数。根据当前选择的起终点坐标计算运动角度。 |
+| `set_movement_length({length, angle?})` | `length` 为运动长度，`angle` 为可选角度。按长度和角度设置当前选择的运动终点。 |
+| `lock_movement_angle({changedAxis, angle?})` | `changedAxis` 指定正在修改的坐标轴，`angle` 为可选运动角度。修改一轴时保持运动角度。 |
+| `split_danmakus({mode})` | `mode` 为 `line`、`letter` 或 `time`。按行、字或按 `currentTime` 时间分割当前选择 |
+| `undo_edit({})` | 无参数。撤销最近一次编辑操作，并恢复当时的选择。 |
+| `redo_edit({})` | 无参数。重做最近一次撤销的编辑操作，并恢复当时的选择。 |
+| `get_frame({timeMs, maxDimension?})` | `timeMs` 指定渲染时间，单位毫秒；`maxDimension` 为可选图片最大尺寸。获取指定时间的画面图片，不改变主窗口播放头。 |
 
 工具栏操作默认对当前选择执行。遇到测量失败时，居中或按字分割会整批取消，不会留下部分修改。
